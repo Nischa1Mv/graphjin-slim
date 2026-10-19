@@ -25,6 +25,9 @@ type mutItem struct {
 	md       mData
 	children []int32
 	render   bool
+	// nested are the payload keys that name a relation rather than a
+	// column. They are not columns of this table.
+	nested map[string]struct{}
 }
 
 // const (
@@ -50,6 +53,10 @@ type mState struct {
 	mt        qcode.MType
 	id        int32
 	rootSelID int32
+	// vars are the values of the request's variables. A payload key bound
+	// to a variable is resolved with them, because the value is what says
+	// whether the key is a column or a nested relation.
+	vars map[string]json.RawMessage
 }
 
 func (co *Compiler) compileMutation(scr *mutState, qc *qcode.QCode,
@@ -150,7 +157,7 @@ func (co *Compiler) compileMutation(scr *mutState, qc *qcode.QCode,
 	if nextID > msID {
 		msID = nextID
 	}
-	ms := mState{st: st, qc: qc, mt: mt, id: msID}
+	ms := mState{st: st, qc: qc, mt: mt, id: msID, vars: vmap}
 
 	for {
 		if st.Len() == 0 {
@@ -533,6 +540,30 @@ func (co *Compiler) parseMutationDataFromArg(scr *mutState, qc *qcode.QCode, key
 	return md, nil
 }
 
+// resolveVarValue returns the value of the variable a payload key is bound
+// to, parsed the way a payload is parsed.
+//
+// It reports false when the variable has no value, or when the value is not
+// an object or a list. A payload key whose value is a plain value is a
+// column, and the renderer binds the variable itself.
+func (co *Compiler) resolveVarValue(ms *mState, node *graph.Node) (*graph.Node, bool) {
+	if node == nil || node.Type != graph.NodeVar {
+		return nil, false
+	}
+	raw, ok := ms.vars[node.Val]
+	if !ok || len(raw) == 0 {
+		return nil, false
+	}
+	value, err := graph.ParseArgValue(string(raw), true)
+	if err != nil {
+		return nil, false
+	}
+	if value.Type != graph.NodeObj && value.Type != graph.NodeList {
+		return nil, false
+	}
+	return value, true
+}
+
 // TODO: Handle cases where a column name matches the child table name
 // the child path needs to be exluded in the json sent to insert or update
 
@@ -605,6 +636,18 @@ func (co *Compiler) processNestedMutations(ms *mState, m *mutItem, data *graph.N
 			return nil, err
 		}
 
+		if md.Data.Type == graph.NodeVar {
+			// A payload key bound to a variable: the value says what the key
+			// is. A list of objects is a nested relation, and a plain value
+			// is a column.
+			resolved, ok := co.resolveVarValue(ms, md.Data)
+			if !ok {
+				continue
+			}
+			md.Data = resolved
+			md.IsJSON = false
+		}
+
 		if md.Data.Type != graph.NodeObj && md.Data.Type != graph.NodeList {
 			continue
 		}
@@ -662,6 +705,12 @@ func (co *Compiler) processNestedMutations(ms *mState, m *mutItem, data *graph.N
 
 		rel := sdata.PathToRel(paths[0])
 		ty := ms.mt
+
+		// The key names a relation, not a column of this table.
+		if m.nested == nil {
+			m.nested = map[string]struct{}{}
+		}
+		m.nested[k] = struct{}{}
 
 		if md.Data.Type == graph.NodeList && ms.mt == qcode.MTInsert {
 			// FindPath resolves child→parent, which is always RelOneToOne for
@@ -962,6 +1011,11 @@ func (co *Compiler) getColumnsFromData(m *mutItem, data *graph.Node, cm map[stri
 		k := co.ParseName(k)
 
 		if _, ok := cm[k]; ok {
+			continue
+		}
+
+		if _, ok := m.nested[k]; ok {
+			// A relation the payload nests, not a column.
 			continue
 		}
 

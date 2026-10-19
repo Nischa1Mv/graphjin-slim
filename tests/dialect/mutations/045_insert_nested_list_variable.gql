@@ -1,0 +1,29 @@
+# A nested one-to-many list bound to a variable. The children get the new
+# parent's id as their foreign key.
+#
+# Before the fix the key was looked for as a column, because the value was a
+# variable and not a list:
+#
+#     column: 'events.registrations' not found
+#
+# vars: {"slug": "probe-nested-var", "regs": [{"name": "Probe Reg", "email": "probe@example.org"}]}
+# expect: "registrations": [{"name": "Probe Reg"}]
+mutation ($slug: String!, $regs: [registrationsInput!]!) {
+  events(
+    insert: {
+      slug: $slug
+      title: "Probe nested variable"
+      host_user_id: "11111111-1111-1111-1111-000000000001"
+      status: "draft"
+      format: "in_person"
+      participation_type: "open"
+      registrations: $regs
+    }
+  ) {
+    id
+    slug
+    registrations {
+      name
+    }
+  }
+}
