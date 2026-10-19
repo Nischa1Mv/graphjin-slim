@@ -621,8 +621,17 @@ func (c *compilerContext) renderFrom(sel *qcode.Select) {
 	// For mutations, use just the table name (no schema) so the CTE created
 	// by INSERT/UPDATE/DELETE shadows the physical table name. This allows
 	// the SELECT to query the mutation's result set instead of the full table.
+	//
+	// A root that shares its table with another root reads a result set of
+	// its own, so it reads the rows it wrote and not the rows the others
+	// wrote. The alias stays the table's name, because that is what the
+	// columns of the select refer to.
 	if c.qc.Type == qcode.QTMutation {
-		c.quoted(sel.Table)
+		name := sel.MutationCTE
+		if name == "" {
+			name = sel.Table
+		}
+		c.quoted(name)
 		c.dialect.RenderTableAlias(c, sel.Table)
 		return
 	}

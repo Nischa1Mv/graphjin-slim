@@ -124,6 +124,12 @@ type Select struct {
 	Through                 string
 	ThroughKind             string
 	TC                      TConfig
+	// MutationCTE is the name of the CTE a mutation root reads its result
+	// from. It is empty when the root reads the table's own name, which is
+	// the case for a mutation that writes one table. A mutation with
+	// several roots on one table gives each root its own CTE, so a root
+	// reads the rows it wrote and not the rows the others wrote.
+	MutationCTE string
 }
 
 type Validation struct {

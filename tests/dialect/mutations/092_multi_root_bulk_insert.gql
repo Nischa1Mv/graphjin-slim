@@ -1,0 +1,15 @@
+# Two roots, each with a list of rows to insert. Each root reads back the rows
+# it wrote, and not the rows the other root wrote.
+#
+# Before the fix the roots shared one result set, so each returned every row,
+# and the second insert of the same rows failed with a duplicate key.
+# vars: {"fields": [{"event_id": "44444444-4444-4444-4444-000000000001", "label": "Bulk A"}], "terms": [{"kind": "event_tag", "slug": "bulk-tag", "label": "Bulk Tag"}]}
+# expect: "form_fields": [{"label": "Bulk A"}], "taxonomy_terms"
+mutation ($fields: [form_fieldsInput!]!, $terms: [taxonomy_termsInput!]!) {
+  form_fields(insert: $fields) {
+    label
+  }
+  taxonomy_terms(insert: $terms) {
+    slug
+  }
+}

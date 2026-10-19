@@ -233,9 +233,24 @@ type InsertConflictGetRenderer interface {
 	RenderInsertConflictGetClause(ctx Context, m *qcode.Mutate)
 }
 
+// mutationCTEName is the name of the CTE a mutation writes its rows to.
+//
+// A mutation that writes a table once keeps the table's own name, so the
+// select that reads it back finds it under that name. A mutation that writes
+// a table more than once, or that shares a table with another root, needs a
+// name of its own for each write.
+func mutationCTEName(qc *qcode.QCode, id int32) string {
+	m := qc.Mutates[id]
+	if m.Multi {
+		return m.Ti.Name + "_" + strconv.FormatInt(int64(m.ID), 10)
+	}
+	return m.Ti.Name
+}
+
 func GenericRenderMutationPostamble(ctx Context, qc *qcode.QCode) {
 	for k, cids := range qc.MUnions {
-		if len(cids) < 2 {
+		if len(cids) < 2 && k == mutationCTEName(qc, cids[0]) {
+			// One write, and the result set is the write's own CTE.
 			continue
 		}
 		ctx.WriteString(`, `)

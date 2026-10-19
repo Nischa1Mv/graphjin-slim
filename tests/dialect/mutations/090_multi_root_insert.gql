@@ -1,3 +1,7 @@
+# Two roots writing the same table. Each root reads back the row it wrote,
+# and not the row the other root wrote. Before the fix both roots read one
+# shared result set, so each returned both rows.
+# expect: }], "b": [{"id"
 mutation {
   a: form_fields(insert: {event_id: "44444444-4444-4444-4444-000000000001", label: "Root A"}) { id }
   b: form_fields(insert: {event_id: "44444444-4444-4444-4444-000000000001", label: "Root B"}) { id }

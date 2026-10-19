@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/aegion-dynamic/graphjin-slim/core/v3/graph"
@@ -74,7 +75,6 @@ func (co *Compiler) compileMutation(scr *mutState, qc *qcode.QCode,
 
 	mutates := []mutItem{}
 	mmap := map[int32]int32{-1: -1}
-	mids := map[string][]int32{}
 	st := util.NewStackInf()
 	var nextID int32
 
@@ -94,7 +94,6 @@ func (co *Compiler) compileMutation(scr *mutState, qc *qcode.QCode,
 			Ti:       sel.Ti,
 			SelID:    rootID,
 		}
-		nextID++
 
 		switch qc.SType {
 		case qcode.QTInsert:
@@ -121,11 +120,17 @@ func (co *Compiler) compileMutation(scr *mutState, qc *qcode.QCode,
 		}
 
 		if mi.md.Data.Type == graph.NodeList {
-			for _, v := range co.processList(mi) {
+			items := co.processList(mi)
+			for _, v := range items {
 				st.Push(v)
 			}
+			// Every element of the list is its own mutation, so the next
+			// root starts after all of them. Sharing an id would give two
+			// mutations the same name and the same result set.
+			nextID += int32(len(items))
 		} else {
 			st.Push(mi)
+			nextID++
 		}
 	}
 
@@ -168,6 +173,12 @@ func (co *Compiler) compileMutation(scr *mutState, qc *qcode.QCode,
 		}
 	}
 
+	// The mutations of one root and one table read back as one result set.
+	// A root reads the rows it wrote, so a mutation with several roots on
+	// one table gives each root its own result set.
+	groups := map[mutGroup][]int32{}
+	tableRoots := map[string]map[int32]struct{}{}
+
 	for i := range mutates {
 		m1 := &mutates[i]
 
@@ -176,7 +187,14 @@ func (co *Compiler) compileMutation(scr *mutState, qc *qcode.QCode,
 		m1.ParentID = mmap[m1.ParentID]
 
 		if m1.Type != qcode.MTNone {
-			mids[m1.Ti.Name] = append(mids[m1.Ti.Name], m1.ID)
+			g := mutGroup{selID: m1.SelID, table: m1.Ti.Name}
+			groups[g] = append(groups[g], m1.ID)
+			roots, ok := tableRoots[m1.Ti.Name]
+			if !ok {
+				roots = map[int32]struct{}{}
+				tableRoots[m1.Ti.Name] = roots
+			}
+			roots[m1.SelID] = struct{}{}
 		}
 
 		for id := range m1.DependsOn {
@@ -188,13 +206,31 @@ func (co *Compiler) compileMutation(scr *mutState, qc *qcode.QCode,
 			m1.children[i] = mmap[id]
 		}
 	}
-	qc.MUnions = mids
+	qc.MUnions = make(map[string][]int32, len(groups))
+	for g, ids := range groups {
+		name := unionName(g, tableRoots)
+		qc.MUnions[name] = ids
+		// The root reads the result set of the table it writes. The
+		// mutations it nests write other tables, and those have result sets
+		// of their own.
+		if int(g.selID) >= len(qc.Selects) {
+			continue
+		}
+		sel := &qc.Selects[g.selID]
+		if g.table == sel.Table && name != sel.Table {
+			sel.MutationCTE = name
+		}
+	}
 
 	// Pull up children of MTNone to the depends-on of it's parent if applicable.
 	for i := range mutates {
 		m1 := &mutates[i]
 
-		if len(mids[m1.Ti.Name]) > 1 {
+		// A mutation that writes one table more than once needs a name of
+		// its own for each write, and so does a table that more than one
+		// root writes to.
+		g := mutGroup{selID: m1.SelID, table: m1.Ti.Name}
+		if len(groups[g]) > 1 || len(tableRoots[m1.Ti.Name]) > 1 {
 			m1.Multi = true
 		}
 
@@ -366,6 +402,25 @@ func columnIsPartOfCompositeKey(ti sdata.DBTable, name string) bool {
 		}
 	}
 	return false
+}
+
+// mutGroup is the set of mutations one root writes to one table.
+type mutGroup struct {
+	selID int32
+	table string
+}
+
+// unionName is the name of the result set a root reads back.
+//
+// A table that one root writes to keeps the table's own name, so nothing
+// changes for the common case. A table that several roots write to gives
+// each root a name of its own, because a root must read the rows it wrote
+// and not the rows the others wrote.
+func unionName(g mutGroup, tableRoots map[string]map[int32]struct{}) string {
+	if len(tableRoots[g.table]) <= 1 {
+		return g.table
+	}
+	return g.table + "__" + strconv.Itoa(int(g.selID))
 }
 
 type mData struct {
