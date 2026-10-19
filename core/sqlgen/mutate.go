@@ -1049,6 +1049,52 @@ func (c *compilerContext) renderValues(m qcode.Mutate, prefix bool) {
 		c.w.WriteString(` FROM `)
 		c.renderNestedRelTables(m, prefix, 0)
 	}
+
+	c.renderInsertWhere(m)
+}
+
+// recordsetAlias is the name the recordset of a mutation's payload is
+// aliased with. The payload's columns are read through it.
+const recordsetAlias = "t"
+
+// renderInsertWhere renders the filter of an insert, which restricts the rows
+// the insert writes.
+//
+// A filter next to an insert used to only filter the rows the insert
+// returned, so a row was written even when the filter did not match. The
+// filter now applies to the insert's source, so a row is written only when
+// the filter matches. The table's own columns are read from the recordset,
+// because that is where the payload's values are.
+func (c *compilerContext) renderInsertWhere(m qcode.Mutate) {
+	if m.Type != qcode.MTInsert {
+		return
+	}
+	// A nested insert belongs to its root, and the root's filter is not the
+	// child's.
+	if m.ParentID != -1 {
+		return
+	}
+
+	var ex *qcode.Exp
+	if m.Where.Exp != nil {
+		ex = m.Where.Exp
+	} else if int(m.SelID) < len(c.qc.Selects) {
+		ex = c.qc.Selects[m.SelID].Where.Exp
+	}
+	if ex == nil {
+		return
+	}
+
+	if !m.IsJSON {
+		// The payload's values are literals here, so there is nothing for a
+		// filter to read. Saying so is better than writing the row and
+		// ignoring the filter.
+		c.SetError(fmt.Errorf("a filter next to an insert needs the payload in a variable, so the filter can read the payload's values"))
+		return
+	}
+
+	c.w.WriteString(` WHERE `)
+	c.renderExpRecordset(m.Ti, ex, recordsetAlias)
 }
 
 func (c *compilerContext) renderMutateToRecordSet(m qcode.Mutate, n int) {

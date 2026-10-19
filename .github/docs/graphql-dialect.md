@@ -580,7 +580,28 @@ mutation ($slug: String!, $regs: [registrationsInput!]!) {
 A bulk insert with an empty list inserts nothing and returns an empty
 list.
 
-### 6.1.1 connect under an insert
+### 6.1.1 A filter next to an insert
+
+A `where` next to an insert restricts the rows the insert **writes**. It
+used to restrict only the rows the insert returned, so a row was written
+even when the filter did not match.
+
+```graphql
+mutation ($input: registrationsInput!) {
+  registrations(insert: $input, where: {event: {slug: {eq: "..."}}}) { id }
+}
+```
+
+If the filter does not match, nothing is written. This is how an insert is
+restricted to the rows the caller owns: the filter names the owner, and a
+caller that does not own the parent writes nothing.
+
+The payload has to be in a variable, because the filter reads the payload's
+values. A filter next to an insert with an inline payload is rejected:
+`a filter next to an insert needs the payload in a variable, so the filter
+can read the payload's values`.
+
+### 6.1.2 connect under an insert
 
 `connect` names a relation and a filter. The row the filter matches is the
 parent, and the child's foreign key is bound to it:
@@ -708,7 +729,7 @@ they are fixed, the corpus will show it:
 - **connect / disconnect** of one-to-many children under an update: renders
   an empty `SET` clause and a dangling `AND`. Fails with
   `syntax error at or near "FROM"`. A connect under an *insert* works
-  (see 6.1.1); it is the update that is broken.
+  (see 6.1.2); it is the update that is broken.
 
 ## 7. Directives
 

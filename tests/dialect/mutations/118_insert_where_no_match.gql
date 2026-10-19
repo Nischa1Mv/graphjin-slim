@@ -1,0 +1,14 @@
+# A filter next to an insert that matches nothing writes nothing. This is
+# how an insert is restricted to the rows the caller owns: the filter names
+# the owner, and a caller that does not own the parent writes nothing.
+#
+# vars: {"input": {"name": "Probe Filter", "email": "probe@example.org", "event_id": "44444444-4444-4444-4444-000000000001"}}
+# expect: "registrations": []
+mutation ($input: registrationsInput!) {
+  registrations(
+    insert: $input
+    where: {event: {slug: {eq: "no-such-event"}}}
+  ) {
+    id
+  }
+}

@@ -1,0 +1,17 @@
+# A filter next to an insert restricts the rows the insert writes. Before
+# the fix the filter only restricted the rows the insert returned, so the
+# row was written even when the filter did not match.
+#
+# The payload is in a variable, because the filter reads the payload's
+# values.
+#
+# vars: {"input": {"name": "Probe Filter", "email": "probe@example.org", "event_id": "44444444-4444-4444-4444-000000000001"}}
+# expect: "registrations": [{"id"
+mutation ($input: registrationsInput!) {
+  registrations(
+    insert: $input
+    where: {event: {slug: {eq: "grid-scale-storage-summit"}}}
+  ) {
+    id
+  }
+}

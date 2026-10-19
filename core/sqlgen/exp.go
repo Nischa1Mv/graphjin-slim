@@ -16,6 +16,11 @@ type expContext struct {
 	sel        *qcode.Select // optional, for outer-alias resolution
 	prefixPath []string
 	skipNested bool
+	// recordsetAlias is set when the table's own columns are read from a
+	// recordset rather than from the table. The recordset of a mutation
+	// holds the payload's values, and it is the payload's columns a filter
+	// on the mutation has to read.
+	recordsetAlias string
 }
 
 func (c *compilerContext) renderExp(ti sdata.DBTable, ex *qcode.Exp, skipNested bool) {
@@ -28,6 +33,17 @@ func (c *compilerContext) renderExpPath(ti sdata.DBTable, ex *qcode.Exp, skipNes
 		ti:              ti,
 		prefixPath:      prefixPath,
 		skipNested:      skipNested,
+	}
+	ec.render(ex)
+}
+
+// renderExpRecordset renders a filter whose table's columns are read from a
+// recordset, which is where a mutation's payload values live.
+func (c *compilerContext) renderExpRecordset(ti sdata.DBTable, ex *qcode.Exp, alias string) {
+	ec := expContext{
+		compilerContext: c,
+		ti:              ti,
+		recordsetAlias:  alias,
 	}
 	ec.render(ex)
 }
@@ -180,7 +196,7 @@ func (c *expContext) renderOp(ex *qcode.Exp) {
 	if ex.Left.Col.Name != "" {
 		var table string
 		if ex.Left.Table == "" {
-			table = ex.Left.Col.Table
+			table = c.localTable(ex.Left.Col.Table)
 		} else {
 			table = ex.Left.Table
 		}
@@ -334,7 +350,7 @@ func (c *expContext) renderVal(ex *qcode.Exp) {
 	case ex.Right.Col.Name != "":
 		var table string
 		if ex.Right.Table == "" {
-			table = ex.Right.Col.Table
+			table = c.localTable(ex.Right.Col.Table)
 		} else {
 			table = ex.Right.Table
 		}
@@ -476,9 +492,26 @@ func (c *expContext) renderColRefVal(ex *qcode.Exp) {
 	c.w.WriteString(`)`)
 }
 
+// localTable returns the name a column of the context's table is read
+// through.
+//
+// When the table's columns come from a recordset, that is the recordset's
+// alias: the payload's values are what the table's columns hold there.
+func (c *expContext) localTable(table string) string {
+	if c.recordsetAlias != "" && table == c.ti.Name {
+		return c.recordsetAlias
+	}
+	return table
+}
+
 // writeLocalColRef emits a reference to a column on c.ti, respecting
 // the dialect's base-table aliasing convention.
 func (c *expContext) writeLocalColRef(col sdata.DBColumn) {
+	if c.recordsetAlias != "" && col.Table == c.ti.Name {
+		// The table's columns are the recordset's columns here.
+		c.colWithTable(c.recordsetAlias, col.Name)
+		return
+	}
 	if c.sel != nil && col.Table == c.sel.Table && dialectAliasesBaseTable(c.dialect) {
 		c.colWithTableID(c.sel.Table, c.sel.ID, col.Name)
 		return
