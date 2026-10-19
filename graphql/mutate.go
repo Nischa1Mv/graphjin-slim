@@ -646,11 +646,24 @@ func (co *Compiler) processList(m mutItem) []mutItem {
 	if m.md.IsJSON {
 		m.Array = m.md.Data.Type == graph.NodeList
 		m.md.Array = m.Array
+		if m.Array && len(m.md.Data.Children) == 0 {
+			// An empty list inserts nothing. The recordset's column list
+			// comes from the first element of the array and there is none,
+			// so the table's own columns are used: the recordset is empty
+			// either way, so the insert writes no rows.
+			m.md.Data = co.emptyPayloadNode(m.Ti)
+			return []mutItem{m}
+		}
 		m.md.Data = m.md.Data.Children[0]
 		return []mutItem{m}
 	}
 
 	// For non-IsJSON (inline data), create separate mutations for each element
+	if len(m.md.Data.Children) == 0 {
+		// An inline list has one insert per element, so an empty list has
+		// no insert at all and nothing to return.
+		return nil
+	}
 	var mList []mutItem
 	for i := range m.md.Data.Children {
 		m1 := m
@@ -661,6 +674,23 @@ func (co *Compiler) processList(m mutItem) []mutItem {
 		mList = append(mList, m1)
 	}
 	return mList
+}
+
+// emptyPayloadNode builds the payload of a bulk insert that has no rows.
+//
+// The recordset's column list is taken from the first element of the array,
+// and an empty array has none, so the table's own columns are used instead.
+// The recordset is empty either way, so the insert writes no rows and the
+// operation returns an empty list.
+func (co *Compiler) emptyPayloadNode(ti sdata.DBTable) *graph.Node {
+	n := &graph.Node{Type: graph.NodeObj, CMap: map[string]*graph.Node{}}
+	for _, col := range ti.Columns {
+		if col.Blocked {
+			continue
+		}
+		n.CMap[col.Name] = &graph.Node{Type: graph.NodeLabel, Val: "null"}
+	}
+	return n
 }
 
 func (co *Compiler) addTablesAndColumns(m *mutItem, items []mutItem, data *graph.Node) error {

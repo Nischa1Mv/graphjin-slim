@@ -1,0 +1,10 @@
+# A bulk insert with an empty list inserts nothing and returns an empty list.
+# Before the fix the compiler indexed the first element of the array and
+# panicked, which closed the REST bridge connection with no status code.
+# vars: {"rows": []}
+# expect: "form_fields": []
+mutation ($rows: [form_fieldsInput!]!) {
+  form_fields(insert: $rows) {
+    id
+  }
+}
