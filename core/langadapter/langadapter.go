@@ -32,6 +32,16 @@ type CompileOptions struct {
 	// Namespace groups saved queries and schema overlays within a
 	// single engine instance.
 	Namespace string
+
+	// ShapeOnly compiles an operation for description rather than for
+	// execution. A mutation whose payload is a variable needs the value of
+	// that variable to compile, because the payload's columns come from it.
+	// A description has no value to give, so the payload is compiled
+	// without its columns instead of failing the whole compile.
+	//
+	// The result is a shape, not a runnable operation: it must not be
+	// executed.
+	ShapeOnly bool
 }
 
 // CompileConfig is the engine-neutral construction configuration every

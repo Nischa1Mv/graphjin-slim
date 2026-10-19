@@ -340,7 +340,12 @@ func (co *Compiler) parseMutationData(scr *mutState, qc *qcode.QCode) (mData, er
 	switch av.Type {
 	case graph.NodeVar:
 		if len(qc.ActionVal) == 0 {
-			return md, fmt.Errorf("variable not found: %s", av.Val)
+			if err := co.missingPayload(scr, av.Val); err != nil {
+				return md, err
+			}
+			md.Data = emptyPayload()
+			md.IsJSON = true
+			return md, nil
 		}
 		md.Data, err = graph.ParseArgValue(string(qc.ActionVal), true)
 		if err != nil {
@@ -352,6 +357,25 @@ func (co *Compiler) parseMutationData(scr *mutState, qc *qcode.QCode) (mData, er
 		md.Data = av
 	}
 	return md, nil
+}
+
+// emptyPayload is a payload with no columns.
+func emptyPayload() *graph.Node {
+	return &graph.Node{Type: graph.NodeObj, CMap: map[string]*graph.Node{}}
+}
+
+// missingPayload reports the payload variable that the operation needs but
+// the request did not supply.
+//
+// A description has no value to give, so in shape only mode the payload is
+// compiled empty: the operation still describes its shape, it just has no
+// columns. Executing it would write nothing, which is why the mode is for
+// description alone.
+func (co *Compiler) missingPayload(scr *mutState, name string) error {
+	if !scr.shapeOnly {
+		return fmt.Errorf("variable not found: %s", name)
+	}
+	return nil
 }
 
 func (co *Compiler) parseMutationDataFromArg(scr *mutState, qc *qcode.QCode, key string, vmap map[string]json.RawMessage) (mData, error) {
@@ -374,7 +398,12 @@ func (co *Compiler) parseMutationDataFromArg(scr *mutState, qc *qcode.QCode, key
 	case graph.NodeVar:
 		val := vmap[av.Val]
 		if len(val) == 0 {
-			return md, fmt.Errorf("variable not found: %s", av.Val)
+			if err := co.missingPayload(scr, av.Val); err != nil {
+				return md, err
+			}
+			md.Data = emptyPayload()
+			md.IsJSON = true
+			return md, nil
 		}
 		md.Data, err = graph.ParseArgValue(string(val), true)
 		if err != nil {

@@ -4,7 +4,9 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 
+	servhttp "github.com/aegion-dynamic/graphjin-slim/serv/v3/http"
 	"github.com/aegion-dynamic/graphjin-slim/serv/v3/module"
 )
 
@@ -43,6 +45,17 @@ func (m mod) Mount(ctx module.Context) (module.Contribution, error) {
 	}
 
 	ns := ctx.Namespace
+	cfg := m.cfg
+	// The generator says what it could not describe, so an operation that is
+	// missing from the specification is never a mystery.
+	if cfg.Logger == nil && ctx.Logger != nil {
+		cfg.Logger = ctx.Logger
+	}
+	// The advertised server has to be where the bridge is mounted, or a
+	// generated client calls a path that answers 403.
+	if cfg.ServerURL == "" {
+		cfg.ServerURL = strings.TrimSuffix(servhttp.RESTPath, "/")
+	}
 	if dir, ok := ctx.String("specs_dir"); ok && dir != "" && ctx.Engine != nil {
 		m.writeSpecs(ctx, dir, ns)
 	}
@@ -66,7 +79,7 @@ func (m mod) Mount(ctx module.Context) (module.Contribution, error) {
 			return
 		}
 
-		spec, err := GenerateJSON(ctx.Engine, ns, m.cfg)
+		spec, err := GenerateJSON(ctx.Engine, ns, cfg)
 		if err != nil {
 			ctx.Logger.Errorf("failed to generate OpenAPI spec: %s", err)
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
@@ -89,7 +102,11 @@ func (m mod) writeSpecs(ctx module.Context, dir string, ns *string) {
 	if ns != nil && *ns != "" {
 		name = *ns + ".openapi.json"
 	}
-	spec, err := GenerateJSON(ctx.Engine, ns, m.cfg)
+	cfg := m.cfg
+	if cfg.Logger == nil && ctx.Logger != nil {
+		cfg.Logger = ctx.Logger
+	}
+	spec, err := GenerateJSON(ctx.Engine, ns, cfg)
 	if err != nil {
 		ctx.Logger.Errorf("failed to generate OpenAPI spec for %s: %s", name, err)
 		return

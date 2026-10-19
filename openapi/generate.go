@@ -14,12 +14,23 @@ import (
 	"github.com/aegion-dynamic/graphjin-slim/core/v3/sdata"
 )
 
+// Logger receives the generator's warnings.
+type Logger interface {
+	Warnf(format string, args ...any)
+}
+
 // Config controls the generated specification metadata.
 type Config struct {
 	Title       string // default "GraphJin REST API"
 	Description string
 	Version     string // default "1.0.0"
 	ServerURL   string // default "/api/v1/rest"
+
+	// Logger, when set, is told about every operation that could not be
+	// described. An operation that cannot be described is left out of the
+	// specification, and saying so is the difference between a gap in the
+	// documentation and a mystery.
+	Logger Logger
 }
 
 func (c Config) withDefaults() Config {
@@ -77,7 +88,7 @@ func Generate(inputs core.OpenAPIInputs, cfg Config) (*Document, error) {
 	generateComponents(doc.Components, inputs)
 
 	for _, item := range inputs.Queries {
-		pathItem, ok := generatePathItem(qcc, item)
+		pathItem, ok := generatePathItem(qcc, item, cfg.Logger, inputs)
 		if !ok {
 			continue
 		}
@@ -191,8 +202,49 @@ func generateComponents(components *Components, inputs core.OpenAPIInputs) {
 				Type:  "array",
 				Items: &Schema{Ref: "#/components/schemas/" + name},
 			}
+
+			// The input schema of a table: what a mutation payload may
+			// carry. Every column is optional, because which ones a payload
+			// has to carry depends on the operation.
+			inputSchema := Schema{
+				Type:       "object",
+				Properties: make(map[string]Schema),
+			}
+			for _, col := range table.Columns {
+				if col.Blocked {
+					continue
+				}
+				inputSchema.Properties[col.Name] = columnToSchema(col)
+			}
+			components.Schemas[name+"Input"] = inputSchema
 		}
 	}
+}
+
+// componentName returns the component name of a table, the same name
+// generateComponents gives it.
+func componentName(table string, inputs core.OpenAPIInputs) string {
+	prefixNonDefault := len(inputs.Databases) > 1
+	for _, dbName := range sortedDBNames(inputs.Databases) {
+		sdb := inputs.Databases[dbName]
+		if sdb == nil {
+			continue
+		}
+		for _, t := range sdb.GetTables() {
+			if t.Name != table {
+				continue
+			}
+			name := title(t.Name)
+			if prefixNonDefault && dbName != core.DefaultDBName {
+				prefix := title(dbName)
+				if !strings.HasPrefix(name, prefix+"_") {
+					name = prefix + "_" + name
+				}
+			}
+			return name
+		}
+	}
+	return title(table)
 }
 
 // queryAnalysis is the compiled form of one saved query.
@@ -201,28 +253,81 @@ type queryAnalysis struct {
 	httpMethods    []string
 	parameters     []Parameter
 	responseSchema Schema
+	// payloadVar is the variable that carries the mutation payload, when the
+	// operation is a mutation.
+	payloadVar string
+	// payloadTable is the table the payload is written to.
+	payloadTable string
+	// payloadComponent is the input schema of that table.
+	payloadComponent string
+	// payloadSchema is the schema of the payload variable.
+	payloadSchema Schema
 }
 
 // analyzeQuery parses and compiles one saved query to extract HTTP methods,
 // parameters, and a response schema.
-func analyzeQuery(qcc langadapter.Language, item allow.Item) (*queryAnalysis, bool) {
-	qc, err := qcc.Compile(item.Query, nil, langadapter.CompileOptions{Namespace: item.Namespace})
+//
+// The compile is a shape only compile: a mutation whose payload is a variable
+// needs the value of that variable to know its columns, and a description has
+// no value to give. Compiling for shape keeps the operation in the
+// specification instead of dropping it.
+func analyzeQuery(qcc langadapter.Language, item allow.Item, logger Logger,
+	inputs core.OpenAPIInputs,
+) (*queryAnalysis, bool) {
+	qc, err := qcc.Compile(item.Query, nil, langadapter.CompileOptions{
+		Namespace: item.Namespace,
+		ShapeOnly: true,
+	})
 	if err != nil {
+		if logger != nil {
+			logger.Warnf("openapi: operation %q is not in the specification: %s", item.Name, err)
+		}
 		return nil, false
 	}
 	var params []Parameter
+	var ps []langadapter.Parameter
 	if pd, ok := qcc.(langadapter.ParameterDescriber); ok {
-		ps, perr := pd.QueryParameters(item.Query)
+		listed, perr := pd.QueryParameters(item.Query)
 		if perr == nil {
+			ps = listed
 			params = parametersFrom(ps)
 		}
 	}
-	return &queryAnalysis{
+	a := &queryAnalysis{
 		name:           item.Name,
 		httpMethods:    httpMethodsFor(qc.Type, qc.SType),
 		parameters:     params,
 		responseSchema: responseSchemaFromQCode(qc),
-	}, true
+	}
+	// A mutation carries its payload in a variable. The variable is typed
+	// from the table it is written to, which is the root of the operation.
+	if qc.ActionVar != "" && len(qc.Roots) > 0 {
+		a.payloadVar = qc.ActionVar
+		a.payloadTable = qc.Selects[qc.Roots[0]].Ti.Name
+		a.payloadComponent = componentName(a.payloadTable, inputs) + "Input"
+		for i := range ps {
+			if ps[i].Name != a.payloadVar {
+				continue
+			}
+			a.payloadSchema = payloadSchema(ps[i].Type, a.payloadComponent)
+		}
+		for i := range a.parameters {
+			if a.parameters[i].Name == a.payloadVar {
+				a.parameters[i].Schema = a.payloadSchema
+			}
+		}
+	}
+	return a, true
+}
+
+// payloadSchema types the variable that carries a mutation payload. The
+// variable's own type says whether it carries one row or a list of them.
+func payloadSchema(varType, component string) Schema {
+	ref := Schema{Ref: "#/components/schemas/" + component}
+	if strings.HasPrefix(varType, "[") {
+		return Schema{Type: "array", Items: &ref}
+	}
+	return ref
 }
 
 // parametersFrom maps seam-level parameter metadata onto OpenAPI
@@ -278,50 +383,69 @@ func graphQLTypeToSchema(graphQLType string) Schema {
 }
 
 // responseSchemaFromQCode builds the response schema from compiled IR.
-// Root selections reference their table's component schema.
+//
+// The bridge answers with an object keyed by the root field, so data holds
+// one property per root, each typed from that root's own selection set
+// rather than from the whole table. The shape follows what the operation
+// selects: the columns it names, and the relations it nests.
 func responseSchemaFromQCode(qc *qcode.QCode) Schema {
-	var dataSchema Schema
-
-	switch {
-	case len(qc.Roots) == 0:
-		dataSchema = Schema{Type: "object"}
-	case len(qc.Roots) == 1:
-		rootSel := &qc.Selects[qc.Roots[0]]
-		if name := rootSel.Ti.Name; name != "" {
-			ref := Schema{Ref: "#/components/schemas/" + title(name)}
-			if rootSel.Singular {
-				dataSchema = ref
-			} else {
-				dataSchema = Schema{Type: "array", Items: &ref}
-			}
+	data := Schema{Type: "object", Properties: map[string]Schema{}}
+	for _, rootID := range qc.Roots {
+		sel := &qc.Selects[rootID]
+		if sel.FieldName == "" {
+			continue
+		}
+		ss := selectSchema(qc, sel)
+		if sel.Singular {
+			data.Properties[sel.FieldName] = ss
 		} else {
-			dataSchema = Schema{Type: "object", Description: "Query result"}
+			data.Properties[sel.FieldName] = Schema{Type: "array", Items: &ss}
 		}
-	default:
-		props := make(map[string]Schema, len(qc.Roots))
-		for _, rootID := range qc.Roots {
-			sel := &qc.Selects[rootID]
-			if sel.Ti.Name == "" {
-				props[sel.FieldName] = Schema{Type: "object", Description: "Query result"}
-				continue
-			}
-			ref := Schema{Ref: "#/components/schemas/" + title(sel.Ti.Name)}
-			if sel.Singular {
-				props[sel.FieldName] = ref
-			} else {
-				props[sel.FieldName] = Schema{Type: "array", Items: &ref}
-			}
-		}
-		dataSchema = Schema{Type: "object", Properties: props}
 	}
 
 	return Schema{
 		Type: "object",
 		Properties: map[string]Schema{
-			"data":   dataSchema,
-			"errors": {Ref: "#/components/schemas/GraphQLError"},
+			"data":   data,
+			"errors": {Type: "array", Items: &Schema{Ref: "#/components/schemas/GraphQLError"}},
 		},
 	}
+}
+
+// selectSchema types one selection: the columns it selects and the relations
+// it nests. A relation is a list unless the selection asks for a single row.
+func selectSchema(qc *qcode.QCode, sel *qcode.Select) Schema {
+	obj := Schema{Type: "object", Properties: map[string]Schema{}}
+
+	for _, f := range sel.Fields {
+		name := f.FieldName
+		if name == "" || strings.HasPrefix(name, "__") {
+			// The engine's own tracking columns are not part of the answer.
+			continue
+		}
+		switch f.Type {
+		case qcode.FieldTypeCol:
+			obj.Properties[name] = columnToSchema(f.Col)
+		default:
+			obj.Properties[name] = Schema{Type: "object", AdditionalProperties: true,
+				Description: "Computed value"}
+		}
+	}
+
+	for _, childID := range sel.Children {
+		child := &qc.Selects[childID]
+		if child.FieldName == "" {
+			continue
+		}
+		cs := selectSchema(qc, child)
+		if child.Singular {
+			obj.Properties[child.FieldName] = cs
+		} else {
+			obj.Properties[child.FieldName] = Schema{Type: "array", Items: &cs}
+		}
+	}
+
+	return obj
 }
 
 // httpMethodsFor determines appropriate HTTP methods for the operation.
@@ -349,8 +473,10 @@ func httpMethodsFor(opType, subType qcode.QType) []string {
 
 // generatePathItem creates the OpenAPI path item for a saved query. The
 // second return value is false when the query could not be analyzed.
-func generatePathItem(qcc langadapter.Language, item allow.Item) (PathItem, bool) {
-	a, ok := analyzeQuery(qcc, item)
+func generatePathItem(qcc langadapter.Language, item allow.Item, logger Logger,
+	inputs core.OpenAPIInputs,
+) (PathItem, bool) {
+	a, ok := analyzeQuery(qcc, item, logger, inputs)
 	if !ok {
 		return PathItem{}, false
 	}

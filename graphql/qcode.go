@@ -49,6 +49,29 @@ func (co *Compiler) Compile(
 	vmap map[string]json.RawMessage,
 	namespace string,
 ) (qc *qcode.QCode, err error) {
+	return co.compile(query, vmap, namespace, false)
+}
+
+// CompileShape lowers GraphQL source into the qcode IR for description only.
+//
+// A mutation whose payload is a variable needs the value of that variable to
+// know its columns, and a description has no value to give. The payload is
+// compiled without its columns instead, so the operation still describes its
+// shape. The result must not be executed.
+func (co *Compiler) CompileShape(
+	query []byte,
+	vmap map[string]json.RawMessage,
+	namespace string,
+) (qc *qcode.QCode, err error) {
+	return co.compile(query, vmap, namespace, true)
+}
+
+func (co *Compiler) compile(
+	query []byte,
+	vmap map[string]json.RawMessage,
+	namespace string,
+	shapeOnly bool,
+) (qc *qcode.QCode, err error) {
 	var op graph.Operation
 	op, err = graph.Parse(query)
 	if err != nil {
@@ -90,7 +113,7 @@ func (co *Compiler) Compile(
 
 	// One scratch instance flows through mutation type detection, data
 	// parsing and conflict configuration so they share what each saw.
-	scr := &mutState{}
+	scr := &mutState{shapeOnly: shapeOnly}
 
 	if err = co.compileQuery(scr, qc, &op); err != nil {
 		return
@@ -940,6 +963,10 @@ type mutState struct {
 	actionArgs map[string]graph.Arg
 	actionArg  graph.Arg
 	mutMeta    map[int32]*mutItem
+	// shapeOnly compiles the operation for description only. A mutation
+	// whose payload is a variable is compiled without the payload's columns
+	// instead of failing, because a description has no value to give.
+	shapeOnly bool
 }
 
 func (co *Compiler) setMutationType(scr *mutState, qc *qcode.QCode, op *graph.Operation) error {

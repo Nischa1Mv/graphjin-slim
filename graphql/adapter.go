@@ -109,6 +109,9 @@ func (l Lang) Name() string { return "graphql" }
 func (l Lang) Compile(query []byte, vars map[string]json.RawMessage,
 	opts langadapter.CompileOptions,
 ) (*qcode.QCode, error) {
+	if opts.ShapeOnly {
+		return l.c.CompileShape(query, vars, opts.Namespace)
+	}
 	return l.c.Compile(query, vars, opts.Namespace)
 }
 
