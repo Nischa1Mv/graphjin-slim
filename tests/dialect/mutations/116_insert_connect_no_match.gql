@@ -1,0 +1,21 @@
+# A connect that matches no parent writes nothing. The child's foreign key
+# would point at a parent that is not there, so the insert has no row to
+# write.
+#
+# This is how an insert is restricted to the rows the caller owns: the
+# connect's filter names the owner, and a caller that does not own the
+# parent writes nothing.
+#
+# vars: {"event_id": "99999999-9999-9999-9999-999999999999", "name": "Probe Connect"}
+# expect: "registrations": []
+mutation ($event_id: UUID!, $name: String!) {
+  registrations(
+    insert: {
+      name: $name
+      email: "probe@example.org"
+      event: {connect: {id: $event_id}}
+    }
+  ) {
+    id
+  }
+}

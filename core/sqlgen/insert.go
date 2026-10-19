@@ -6,7 +6,6 @@ import (
 
 	"github.com/aegion-dynamic/graphjin-slim/core/v3/dialect"
 	"github.com/aegion-dynamic/graphjin-slim/core/v3/qcode"
-	"github.com/aegion-dynamic/graphjin-slim/core/v3/sdata"
 )
 
 func (c *compilerContext) renderInsert() {
@@ -19,9 +18,12 @@ func (c *compilerContext) renderInsert() {
 		case m.Type == qcode.MTUpsert:
 			i = c.renderComma(i)
 			c.renderInsertStmt(m, true)
-		case m.Rel.Type == sdata.RelOneToOne && m.Type == qcode.MTConnect:
-			i = c.renderComma(i)
-			c.renderOneToOneConnectStmt(m)
+		case m.Type == qcode.MTConnect:
+			// A connect under an insert is a lookup: the CTE holds the
+			// parent's key column for the row the filter matches, and the
+			// insert binds its foreign key to it. The insert renders it as
+			// one of its dependencies, so it is not rendered here.
+			continue
 		}
 	}
 }

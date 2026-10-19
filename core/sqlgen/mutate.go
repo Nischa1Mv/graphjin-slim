@@ -849,7 +849,9 @@ func (c *compilerContext) renderOneToManyConnectStmt(m qcode.Mutate) {
 	} else {
 		c.w.WriteString(` FROM `)
 	}
-	c.quoted(m.Ti.Name)
+	// The table is read with its schema, and the alias is the table's name
+	// because the filter refers to the columns that way.
+	c.table(nil, m.Ti.Schema, m.Ti.Name, true)
 
 	c.w.WriteString(` WHERE `)
 	if c.dialect.Name() == "postgres" {

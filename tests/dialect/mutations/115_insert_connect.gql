@@ -1,0 +1,19 @@
+# connect under an insert sets the foreign key to the row the filter
+# matches. Before the fix the connect was dropped and the insert rendered
+# invalid SQL:
+#
+#     ERROR: syntax error at or near ")" (SQLSTATE 42601)
+#
+# vars: {"event_id": "44444444-4444-4444-4444-000000000001", "name": "Probe Connect"}
+# expect: "registrations": [{"id"
+mutation ($event_id: UUID!, $name: String!) {
+  registrations(
+    insert: {
+      name: $name
+      email: "probe@example.org"
+      event: {connect: {id: $event_id}}
+    }
+  ) {
+    id
+  }
+}

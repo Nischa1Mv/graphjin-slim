@@ -540,6 +540,73 @@ func (co *Compiler) parseMutationDataFromArg(scr *mutState, qc *qcode.QCode, key
 	return md, nil
 }
 
+// connectFilter returns the filter of a connect, when the payload is one.
+//
+// A connect names a relation and a filter: the relation says which table to
+// look in and the filter says which row.
+func connectFilter(v *graph.Node) (*graph.Node, bool) {
+	if v == nil || v.CMap == nil {
+		return nil, false
+	}
+	c, ok := v.CMap["connect"]
+	if !ok || c == nil || c.Type != graph.NodeObj {
+		return nil, false
+	}
+	return c, true
+}
+
+// newConnectMutate builds the lookup of a connect.
+//
+// The lookup holds the parent's key column, and the child's foreign key is
+// bound to it. The relation is turned around, because the lookup reads the
+// parent and the relation is written from the child.
+func (co *Compiler) newConnectMutate(ms *mState, m *mutItem, key string,
+	rel sdata.DBRel, filter *graph.Node,
+) (mutItem, error) {
+	// The relation is written from the child to the parent, but the path
+	// may be resolved from either side, so the child is found by its table.
+	childFK, parentID := rel.Left.Col, rel.Right.Col
+	parent := rel.Right.Ti
+	if rel.Left.Ti.Schema != m.Ti.Schema || rel.Left.Ti.Name != m.Ti.Name {
+		childFK, parentID = rel.Right.Col, rel.Left.Col
+		parent = rel.Left.Ti
+	}
+
+	// The lookup reads the parent, so its key column is on the left and the
+	// child's foreign key on the right.
+	lookup := rel
+	lookup.Left.Col = parentID
+	lookup.Right.Col = childFK
+
+	mi := mutItem{Mutate: qcode.Mutate{
+		ID:       ms.id,
+		ParentID: m.ID,
+		Type:     qcode.MTConnect,
+		Key:      key,
+		Path:     append(m.Path, key),
+		Rel:      lookup,
+		Ti:       parent,
+	}, md: mData{Data: filter}}
+	ms.id++
+
+	// The filter says which parent row the connect finds.
+	st := util.NewStackInf()
+	// The node's name is not copied: it is the key the filter had in the
+	// payload, and a filter's name is a table, not a key.
+	node := &graph.Node{
+		Type:     filter.Type,
+		Children: filter.Children,
+		CMap:     filter.CMap,
+	}
+	exp, _, err := co.compileBaseExpNode("", parent, st, node, false)
+	if err != nil {
+		return mi, err
+	}
+	mi.Where.Exp = exp
+
+	return mi, nil
+}
+
 // resolveVarValue returns the value of the variable a payload key is bound
 // to, parsed the way a payload is parsed.
 //
@@ -568,6 +635,14 @@ func (co *Compiler) resolveVarValue(ms *mState, node *graph.Node) (*graph.Node, 
 // the child path needs to be exluded in the json sent to insert or update
 
 func (co *Compiler) newMutate(ms *mState, m mutItem) error {
+	if m.Type == qcode.MTConnect || m.Type == qcode.MTDisconnect {
+		// A connect is a lookup, not a write. Its filter is already
+		// compiled and there is no payload to process.
+		m.render = true
+		ms.st.Push(m)
+		return nil
+	}
+
 	data := m.md.Data
 
 	items, err := co.processNestedMutations(ms, &m, data)
@@ -591,16 +666,25 @@ func (co *Compiler) newMutate(ms *mState, m mutItem) error {
 	switch m.Type {
 	case qcode.MTInsert:
 		for _, v := range items {
+			if v.Type == qcode.MTConnect {
+				continue
+			}
 			if v.Rel.Type == sdata.RelOneToMany {
 				ms.st.Push(v)
 			}
 		}
 		for _, v := range items {
-			if v.Rel.Type == sdata.RelOneToOne {
+			if v.Rel.Type == sdata.RelOneToOne && v.Type != qcode.MTConnect {
 				ms.st.Push(v)
 			}
 		}
 		ms.st.Push(m)
+		// A connect is a lookup the insert reads, so it is written first.
+		for _, v := range items {
+			if v.Type == qcode.MTConnect {
+				ms.st.Push(v)
+			}
+		}
 
 	case qcode.MTUpdate:
 		for _, v := range items {
@@ -705,6 +789,19 @@ func (co *Compiler) processNestedMutations(ms *mState, m *mutItem, data *graph.N
 
 		rel := sdata.PathToRel(paths[0])
 		ty := ms.mt
+
+		// A nested relation whose payload is a connect is not written, it is
+		// looked up: the row that matches the filter is the parent, and the
+		// child's foreign key is bound to it. If nothing matches, the
+		// child's foreign key is null and the insert writes nothing.
+		if filter, ok := connectFilter(v); ok && ms.mt == qcode.MTInsert {
+			mi, err := co.newConnectMutate(ms, m, k, rel, filter)
+			if err != nil {
+				return nil, err
+			}
+			items = append(items, mi)
+			continue
+		}
 
 		// The key names a relation, not a column of this table.
 		if m.nested == nil {
@@ -917,10 +1014,28 @@ func (co *Compiler) addTablesAndColumns(m *mutItem, items []mutItem, data *graph
 			cm[m.Rel.Right.Col.Name] = struct{}{}
 		}
 
+		// A connect under an insert binds the insert's foreign key to the
+		// row the connect found.
+		for _, v := range items {
+			if v.Type != qcode.MTConnect {
+				continue
+			}
+			m.DependsOn[v.ID] = struct{}{}
+			m.RCols = append(m.RCols, qcode.MRColumn{
+				Col:  v.Rel.Right.Col,
+				VCol: v.Rel.Left.Col,
+			})
+			cm[v.Rel.Right.Col.Name] = struct{}{}
+		}
+
 		// Render columns and values needed by the children of the current level
 		// Render child foreign key columns if child-to-parent
 		// relationship is one-to-many
 		for _, v := range items {
+			if v.Type == qcode.MTConnect {
+				// A connect binds the foreign key above.
+				continue
+			}
 			if v.Rel.Type != sdata.RelOneToMany {
 				continue
 			}
