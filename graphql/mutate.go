@@ -282,12 +282,34 @@ func (co *Compiler) configureInsertConflict(scr *mutState, qc *qcode.QCode) erro
 		}
 	}
 
+	// A unique key qualifies when the payload supplies every one of its
+	// columns. A key is a property of the tuple, so a composite key needs
+	// all of its columns, and a single column key needs its one.
+	for _, key := range m.Ti.UniqueKeys {
+		cols := make([]qcode.MColumn, 0, len(key))
+		for _, name := range key {
+			mc, ok := byName[name]
+			if !ok {
+				cols = nil
+				break
+			}
+			cols = append(cols, mc)
+		}
+		if len(cols) != 0 {
+			candidates = append(candidates, cols)
+		}
+	}
+
+	// A column that is unique on its own is a key of one column. A column of
+	// a composite key is not: it is only unique together with the others.
 	for _, col := range m.Ti.Columns {
 		if col.PrimaryKey || !col.UniqueKey {
 			continue
 		}
-		if mc, ok := byName[col.Name]; ok {
-			candidates = append(candidates, []qcode.MColumn{mc})
+		if !columnIsPartOfCompositeKey(m.Ti, col.Name) {
+			if mc, ok := byName[col.Name]; ok {
+				candidates = append(candidates, []qcode.MColumn{mc})
+			}
 		}
 	}
 
@@ -295,20 +317,55 @@ func (co *Compiler) configureInsertConflict(scr *mutState, qc *qcode.QCode) erro
 		return fmt.Errorf("on_conflict: get on table %q requires a supplied primary or unique key", m.Ti.Name)
 	}
 	if len(candidates) > 1 {
-		names := make([]string, 0, len(candidates))
-		for _, candidate := range candidates {
-			parts := make([]string, len(candidate))
-			for i := range candidate {
-				parts[i] = candidate[i].Col.Name
+		// The loosest key is the one that conflicts first, so it is the one
+		// that returns the existing row. Two keys of the same width are
+		// genuinely ambiguous.
+		loosest := candidates[0]
+		for _, candidate := range candidates[1:] {
+			if len(candidate) < len(loosest) {
+				loosest = candidate
 			}
-			names = append(names, strings.Join(parts, "+"))
 		}
-		return fmt.Errorf("on_conflict: get on table %q is ambiguous; supplied unique keys: %s", m.Ti.Name, strings.Join(names, ", "))
+		tied := 0
+		for _, candidate := range candidates {
+			if len(candidate) == len(loosest) {
+				tied++
+			}
+		}
+		if tied > 1 {
+			names := make([]string, 0, len(candidates))
+			for _, candidate := range candidates {
+				parts := make([]string, len(candidate))
+				for i := range candidate {
+					parts[i] = candidate[i].Col.Name
+				}
+				names = append(names, strings.Join(parts, "+"))
+			}
+			return fmt.Errorf("on_conflict: get on table %q is ambiguous; supplied unique keys: %s", m.Ti.Name, strings.Join(names, ", "))
+		}
+		candidates = [][]qcode.MColumn{loosest}
 	}
 
 	m.ConflictAction = qcode.ConflictGet
 	m.ConflictCols = candidates[0]
 	return nil
+}
+
+// columnIsPartOfCompositeKey reports whether the column is one of the
+// columns of a key with more than one column. Such a column is not unique on
+// its own, so it cannot stand for a key by itself.
+func columnIsPartOfCompositeKey(ti sdata.DBTable, name string) bool {
+	for _, key := range ti.UniqueKeys {
+		if len(key) < 2 {
+			continue
+		}
+		for _, k := range key {
+			if k == name {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 type mData struct {

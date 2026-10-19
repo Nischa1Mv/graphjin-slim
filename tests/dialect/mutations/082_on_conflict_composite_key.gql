@@ -1,0 +1,17 @@
+# on_conflict: get accepts a composite unique key when the payload supplies
+# every column of it. The key is a property of the tuple, so neither column
+# is unique on its own.
+# expect: grace.wanjiru@kenpower.co.ke
+mutation {
+  registrations(
+    insert: {
+      event_id: "44444444-4444-4444-4444-000000000001"
+      email: "grace.wanjiru@kenpower.co.ke"
+      name: "Grace Wanjiru"
+    }
+    on_conflict: get
+  ) {
+    id
+    email
+  }
+}

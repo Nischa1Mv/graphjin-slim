@@ -1485,6 +1485,13 @@ table "taxonomy_terms" {
     unique  = true
   }
 
+  # A single column unique index. It is a key of one column, unlike the
+  # composite one above, and the engine has to tell the two apart.
+  index "taxonomy_terms_slug_key" {
+    columns = [column.slug]
+    unique  = true
+  }
+
   index "idx_taxonomy_terms_parent_id" {
     columns = [column.parent_id]
   }

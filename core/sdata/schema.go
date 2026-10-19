@@ -183,6 +183,23 @@ func NewDBSchemaWithConfig(
 		schema.addAliases(schema.tables[nid], nid, aliases[t.Name])
 	}
 
+	// The unique keys of every table, so a table can be asked which tuples
+	// are unique. A key whose columns are not all present is not a key of
+	// this table.
+	for _, uk := range info.UniqueKeys {
+		for i := range schema.tables {
+			t := &schema.tables[i]
+			if t.Schema != uk.Schema || t.Name != uk.Table {
+				continue
+			}
+			if !t.hasColumns(uk.Columns) {
+				break
+			}
+			t.UniqueKeys = append(t.UniqueKeys, uk.Columns)
+			break
+		}
+	}
+
 	for _, t := range info.VTables {
 		if err := schema.addVirtual(t); err != nil {
 			return nil, err

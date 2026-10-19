@@ -106,6 +106,7 @@ func getDBInfoOnce(
 	var cols []DBColumn
 	var funcs []DBFunction
 	var compositeFKs []CompositeFKInfo
+	var uniqueKeys []sdata.UniqueKeyInfo
 
 	g, gctx := errgroup.WithContext(ctx)
 
@@ -160,6 +161,17 @@ func getDBInfoOnce(
 		return nil
 	})
 
+	g.Go(func() error {
+		// The unique keys are an enrichment: a table that cannot be read
+		// loses its keys, not the whole schema.
+		keys, err := DiscoverUniqueKeys(gctx, db, dbType)
+		if err != nil {
+			return nil
+		}
+		uniqueKeys = dedupeUniqueKeys(keys)
+		return nil
+	})
+
 	if err := g.Wait(); err != nil {
 		return nil, err
 	}
@@ -181,6 +193,7 @@ func getDBInfoOnce(
 		funcs,
 		blockList)
 	di.CompositeFKs = compositeFKs
+	di.UniqueKeys = uniqueKeys
 
 	return di, nil
 }

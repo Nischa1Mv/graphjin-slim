@@ -1,0 +1,12 @@
+# on_conflict: get accepts a single column unique index, not only a unique
+# constraint. A unique index is a key just like a constraint is.
+# expect: networking
+mutation {
+  taxonomy_terms(
+    insert: {kind: "event_tag", slug: "networking", label: "Networking"}
+    on_conflict: get
+  ) {
+    id
+    slug
+  }
+}

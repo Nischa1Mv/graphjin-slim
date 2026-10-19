@@ -18,9 +18,12 @@ type DBInfo struct {
 	Functions    []DBFunction
 	VTables      []VirtualTable    `json:"-"`
 	CompositeFKs []CompositeFKInfo `json:"-"`
-	colMap       map[string]int
-	tableMap     map[string]int
-	hash         int
+	// UniqueKeys lists the unique keys of every table, so a table can be
+	// asked which tuples are unique.
+	UniqueKeys []UniqueKeyInfo `json:"-"`
+	colMap     map[string]int
+	tableMap   map[string]int
+	hash       int
 }
 
 // DBTable holds the database table information
@@ -33,13 +36,17 @@ type DBTable struct {
 	Type       string
 	// Database is the name of the database this table belongs to (for multi-database support).
 	// Empty string means the default database.
-	Database             string
-	Columns              []DBColumn
-	PrimaryCols          []DBColumn
-	PrimaryCol           DBColumn // backward compat: alias for PrimaryCols[0]
-	SecondaryCol         DBColumn
-	FullText             []DBColumn
-	Blocked              bool
+	Database     string
+	Columns      []DBColumn
+	PrimaryCols  []DBColumn
+	PrimaryCol   DBColumn // backward compat: alias for PrimaryCols[0]
+	SecondaryCol DBColumn
+	FullText     []DBColumn
+	Blocked      bool
+	// UniqueKeys lists the table's unique keys: the columns of every unique
+	// constraint and every unique index, in key order. A single column key
+	// is one column. The primary key is not listed here.
+	UniqueKeys           [][]string
 	Func                 DBFunction
 	ClusteringKeys       []string          // Warehouse clustering key columns (normalized to snake_case)
 	ClusteringOrder      map[string]string // Cassandra clustering column -> asc|desc
@@ -210,6 +217,16 @@ func (t *DBTable) IsPKCol(name string) bool {
 }
 
 // GetColumnIndex returns the index of a column in the table by name, and whether it was found.
+// hasColumns reports whether the table has every one of the named columns.
+func (t *DBTable) hasColumns(names []string) bool {
+	for _, n := range names {
+		if _, ok := t.GetColumnIndex(n); !ok {
+			return false
+		}
+	}
+	return true
+}
+
 func (t *DBTable) GetColumnIndex(name string) (int, bool) {
 	if t.colMap == nil {
 		return 0, false
@@ -308,6 +325,17 @@ type DBColumn struct {
 	OrigFKeyTable  string
 	OrigFKeySchema string
 	OrigFKeyCol    string
+}
+
+// UniqueKeyInfo describes one unique key of a table: the columns of a unique
+// constraint or a unique index, in key order.
+//
+// A unique key is a property of the tuple, not of the columns: two columns
+// that are only unique together are not unique on their own.
+type UniqueKeyInfo struct {
+	Schema  string
+	Table   string
+	Columns []string
 }
 
 // ColPair represents a column pair in a composite foreign key relationship.
