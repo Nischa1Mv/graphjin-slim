@@ -11,6 +11,8 @@
 //	                                                 analytics_mode engine
 //	# expect-error: <substring>                      example is expected to
 //	                                                 fail; documents a limit
+//	# expect: <substring>                          the result data must
+//	                                                 contain this substring
 //	# note: <text>                                   printed with the result
 //
 // Every example runs inside a database transaction that is ALWAYS rolled
@@ -41,14 +43,15 @@ import (
 )
 
 type example struct {
-	path       string
-	name       string
-	query      string
-	vars       map[string]any
-	useCursor  string
-	analytics  bool
-	expectErr  string
-	note       string
+	path      string
+	name      string
+	query     string
+	vars      map[string]any
+	useCursor string
+	analytics bool
+	expectErr string
+	expect    string
+	note      string
 }
 
 func main() {
@@ -188,6 +191,14 @@ func main() {
 				continue
 			}
 			out := string(res.Data)
+			if ex.expect != "" && !strings.Contains(out, ex.expect) {
+				failed++
+				fmt.Printf("FAIL: expected %q in the result, got: %.300s\n", ex.expect, out)
+				if ex.note != "" {
+					fmt.Printf("note: %s\n", ex.note)
+				}
+				continue
+			}
 			if len(out) > 500 {
 				out = out[:500] + " …TRUNC"
 			}
@@ -248,6 +259,8 @@ func load(dir string) []example {
 				ex.analytics = strings.TrimSpace(t[len("analytics: "):]) == "on"
 			case strings.HasPrefix(t, "expect-error: "):
 				ex.expectErr = strings.TrimSpace(t[len("expect-error: "):])
+			case strings.HasPrefix(t, "expect: "):
+				ex.expect = strings.TrimSpace(t[len("expect: "):])
 			case strings.HasPrefix(t, "note: "):
 				ex.note = t[6:]
 			}

@@ -190,6 +190,19 @@ query {
 This composes with all the operators below, so
 `where: {registrations: {created_at: {gte: "..."}}}` works the same way.
 
+A related table filter may hold more than one condition. They all apply to
+the same related row:
+
+```graphql
+query {
+  events(where: {registrations: {name: {eq: "Mei Tanaka"}, email: {eq: "mei.tanaka@asiacleanlab.jp"}}}) {
+    title
+  }
+}
+```
+
+This works in a query and in the `where` of a delete or an update.
+
 ## 3. `where`: the filter grammar
 
 The `where` argument is an object. Its keys are one of four kinds of thing:
@@ -274,6 +287,18 @@ fails with `where: [Where] invalid values for: week_id`. Always write
 `{is_null: true}`. The reason: the shorthand path only knows how to compare
 scalar values, and null comparison in SQL has the special IS NULL semantics,
 so the compiler refuses rather than guessing.
+
+A `null` in an insert or update payload is SQL NULL, the same as a null
+variable:
+
+```graphql
+mutation {
+  events(update: {summary: null}, where: {id: {eq: "..."}}) { id summary }
+}
+```
+
+The string `"null"` and the null literal are different values, and the
+literal is not quoted.
 
 ### 3.5 The `id` shorthand
 
@@ -544,6 +569,45 @@ mutation ($input: eventsInput!) {
 A single nested object child (one-to-one) is also supported. Nested lists
 under update/upsert are not (see the limitations table).
 
+A nested list may be bound to a variable:
+
+```graphql
+mutation ($slug: String!, $regs: [registrationsInput!]!) {
+  events(insert: {slug: $slug, ..., registrations: $regs}) { id registrations { name } }
+}
+```
+
+A bulk insert with an empty list inserts nothing and returns an empty
+list.
+
+### 6.1.1 connect under an insert
+
+`connect` names a relation and a filter. The row the filter matches is the
+parent, and the child's foreign key is bound to it:
+
+```graphql
+mutation ($event_id: UUID!, $name: String!) {
+  registrations(insert: {name: $name, email: "...", event: {connect: {id: $event_id}}}) { id }
+}
+```
+
+If the filter matches nothing, the child's foreign key would point at a
+parent that is not there, so nothing is written.
+
+This is also how an insert is restricted to the rows the caller owns: the
+filter names the owner, and a caller that does not own the parent writes
+nothing.
+
+```graphql
+mutation ($user_id: UUID!, $session_id: UUID!) {
+  chat_messages(insert: {session_id: $session_id, user_id: $user_id, ...,
+                          chat_sessions: {connect: {id: $session_id, user_id: $user_id}}}) { id }
+}
+```
+
+A `where` next to an `insert` filters the rows the insert returns, not the
+rows it writes. Use a connect when the insert has to be conditional.
+
 ### 6.2 JSON columns in payloads
 
 Send real JSON. Since the issue #5 fix, a genuine array or object in the
@@ -603,6 +667,20 @@ bulk arrays, no nested payloads, and the payload must supply a unique or
 primary key. `on_conflict: {update: ...}` is rejected with
 `value for 'on_conflict' must be 'get'`.
 
+The key may be the primary key, a unique constraint or a unique index, and
+it may be a composite one. A key is a property of the tuple, so every
+column of a composite key has to be in the payload:
+
+```graphql
+mutation {
+  ratings(insert: {recipe_id: $recipe_id, user_id: $user_id, score: $score}, on_conflict: get) { recipe_id }
+}
+```
+
+When the payload supplies more than one key, the loosest one is the
+conflict target, because it is the one that conflicts first. Two keys of
+the same width are ambiguous and are rejected.
+
 ### 6.5 Multiple root mutations
 
 Several root mutates in one operation are supported. The compiler orders
@@ -616,6 +694,9 @@ mutation {
 }
 ```
 
+Each root reads back the rows it wrote. Two roots that write the same
+table do not share a result set, so each one returns its own rows.
+
 ### 6.6 Known-broken mutation shapes
 
 Two mutation shapes render structurally invalid SQL on Postgres today. They
@@ -626,7 +707,8 @@ they are fixed, the corpus will show it:
   Fails with `syntax error at or near "ON"`.
 - **connect / disconnect** of one-to-many children under an update: renders
   an empty `SET` clause and a dangling `AND`. Fails with
-  `syntax error at or near "FROM"`.
+  `syntax error at or near "FROM"`. A connect under an *insert* works
+  (see 6.1.1); it is the update that is broken.
 
 ## 7. Directives
 
