@@ -155,14 +155,19 @@ func (ast *aexpst) parseNode(av aexp, node *graph.Node, selID int32) (*qcode.Exp
 	switch node.Type {
 	// { column: { op: value } }
 	case graph.NodeObj:
-		if len(node.Children) != 1 {
-			return nil, fmt.Errorf("[Where] invalid operation: %s", name)
-		}
-
+		// A related table filter may hold more than one condition: the
+		// relation's own filters and further relations all apply to the same
+		// related row. A column filter holds exactly one operator, and that
+		// is checked after the relation case, because the relation case is
+		// the one that allows several children.
 		if ok, err := ast.processNestedTable(av, ex, node); err != nil {
 			return nil, err
 		} else if ok {
 			return ex, nil
+		}
+
+		if len(node.Children) != 1 {
+			return nil, fmt.Errorf("[Where] invalid operation: %s", name)
 		}
 
 		// Check for JSON path operations on nested objects
@@ -1005,7 +1010,7 @@ func (ast *aexpst) processNestedTable(av aexp, ex *qcode.Exp, node *graph.Node) 
 
 	var n, ln *graph.Node
 	for n = node; ; {
-		if len(n.Children) != 1 {
+		if len(n.Children) == 0 {
 			break
 		}
 		k := n.Name
@@ -1016,8 +1021,9 @@ func (ast *aexpst) processNestedTable(av aexp, ex *qcode.Exp, node *graph.Node) 
 		curr = ast.co.ParseName(k)
 
 		if curr == ti.Name {
-			continue
-			// return fmt.Errorf("selector table not allowed in where: %s", ti.Name)
+			// The filter names the table it is already on. There is no join
+			// to make, and continuing the walk here would not advance.
+			break
 		}
 
 		// If curr is a column on the previously resolved table (prev), don't
@@ -1046,6 +1052,12 @@ func (ast *aexpst) processNestedTable(av aexp, ex *qcode.Exp, node *graph.Node) 
 
 		prev = curr
 		ln = n
+		// One child continues the chain to the next relation. Several
+		// children are several conditions on this relation, and each is
+		// applied to it on its own, so the chain stops here.
+		if len(n.Children) != 1 {
+			break
+		}
 		n = n.Children[0]
 	}
 

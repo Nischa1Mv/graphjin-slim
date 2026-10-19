@@ -1,0 +1,9 @@
+# A related table filter works in a delete where, the same way it works in a
+# query. Before the fix it failed to compile with
+# "[Where] invalid operation: registrations".
+# expect: grid-scale-storage-summit
+mutation {
+  events(delete: true, where: {registrations: {name: {eq: "Grace Wanjiru"}}}) {
+    slug
+  }
+}

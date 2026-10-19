@@ -123,8 +123,13 @@ func (c *expContext) renderNestedExp(st *util.StackInf, ex *qcode.Exp) {
 
 	c.w.WriteString(` AND `)
 	st.Push(')')
+	// The conditions of the related row are ANDed together. A related table
+	// filter may hold more than one, so the operator goes between them.
 	for i := len(ex.Children) - 1; i >= 0; i-- {
 		st.Push(ex.Children[i])
+		if i > 0 {
+			st.Push(qcode.OpAnd)
+		}
 	}
 }
 

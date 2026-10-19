@@ -1,0 +1,11 @@
+# A related table filter may hold more than one condition. Before the fix a
+# filter object with two children was rejected with
+# "[Where] invalid operation: registrations".
+# expect: grid-scale-storage-summit
+query {
+  events(
+    where: {registrations: {name: {eq: "Grace Wanjiru"}, email: {eq: "grace.wanjiru@kenpower.co.ke"}}}
+  ) {
+    slug
+  }
+}
