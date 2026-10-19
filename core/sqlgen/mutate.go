@@ -574,6 +574,7 @@ func (c *compilerContext) renderColumnValue(m qcode.Mutate, col qcode.MColumn) {
 	var listItems []string
 
 	isEmptyList := false
+	isNull := false
 	if col.Set {
 		v = col.Value
 		if v != "" && v[0] == '$' {
@@ -585,6 +586,7 @@ func (c *compilerContext) renderColumnValue(m qcode.Mutate, col qcode.MColumn) {
 		v = cv.Val
 		vk = v
 		isVar = cv.Var
+		isNull = cv.Null
 		if cv.List {
 			listItems = cv.ListItems
 			// Mark as empty list if NodeList but no children
@@ -622,6 +624,12 @@ func (c *compilerContext) renderColumnValue(m qcode.Mutate, col qcode.MColumn) {
 			} else {
 				c.colWithTable("t", col.FieldName)
 			}
+
+		case isNull:
+			// The payload said null, so the column is set to SQL NULL. The
+			// JSON path above already produces NULL, because a JSON null
+			// comes back as a NULL column out of the recordset.
+			c.w.WriteString(`NULL`)
 
 		case isEmptyList:
 			// Render empty array literal for the dialect

@@ -870,6 +870,13 @@ func (co *Compiler) colValsFromNode(t sdata.DBTable, n *graph.Node) map[string]q
 		switch f.Type {
 		case graph.NodeVar:
 			cv.Var = true
+		case graph.NodeLabel:
+			// A bare null in a payload is SQL NULL, not the four character
+			// string "null". The renderer quoted it, so `update: {cover:
+			// null}` stored the string and Postgres refused the uuid cast.
+			if f.Val == "null" {
+				cv.Null = true
+			}
 		case graph.NodeList:
 			cv.List = true
 			items := make([]string, 0, len(f.Children))

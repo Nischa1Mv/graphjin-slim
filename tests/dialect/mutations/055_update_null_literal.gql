@@ -1,0 +1,13 @@
+# A literal null in an update payload is SQL NULL, not the string "null".
+# Before the fix the value was quoted, so the uuid cast failed with
+# "invalid input syntax for type uuid: \"null\"".
+# expect: "summary": null
+mutation {
+  events(
+    update: {summary: null}
+    where: {id: {eq: "44444444-4444-4444-4444-000000000004"}}
+  ) {
+    id
+    summary
+  }
+}

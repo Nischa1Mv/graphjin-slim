@@ -62,9 +62,14 @@ type Mutate struct {
 
 // ColVal is one mutation payload value: either a literal or a $var
 // reference, optionally a list of pre-rendered SQL literal items.
+//
+// Null marks a payload value that was the null literal. It is separate from
+// Val because the string "null" and the null literal are different values,
+// and quoting the literal turned it into the four character string.
 type ColVal struct {
 	Val       string
 	Var       bool
+	Null      bool
 	List      bool
 	ListItems []string
 }
