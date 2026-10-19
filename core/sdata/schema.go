@@ -331,16 +331,61 @@ func (s *DBSchema) addRemoteRel(t DBTable) error {
 	return err
 }
 
+// tupleIsUnique reports whether the columns are unique as a tuple.
+//
+// A tuple is unique when it is the table's primary key or one of its unique
+// keys. The columns on their own are not: a composite key says the tuple is
+// unique, not that any one of its columns is.
+func tupleIsUnique(t DBTable, cols []string) bool {
+	if len(cols) == 0 {
+		return false
+	}
+	pk := make([]string, 0, len(t.PrimaryCols))
+	for _, c := range t.PrimaryCols {
+		pk = append(pk, c.Name)
+	}
+	if sameColumns(pk, cols) {
+		return true
+	}
+	for _, key := range t.UniqueKeys {
+		if sameColumns(key, cols) {
+			return true
+		}
+	}
+	return false
+}
+
+// sameColumns reports whether two column lists name the same columns, in any
+// order.
+func sameColumns(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	set := make(map[string]struct{}, len(a))
+	for _, c := range a {
+		set[c] = struct{}{}
+	}
+	for _, c := range b {
+		if _, ok := set[c]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
 // addColumnRels adds column relationships to the schema
 func (s *DBSchema) addColumnRels(t DBTable) error {
 	// Build lookup for composite FK columns belonging to this table.
 	// Key: column name → constraint name
 	compositeCols := make(map[string]string)
+	// Key: constraint name → the foreign key's columns
+	compositeFK := make(map[string]CompositeFKInfo)
 	for _, cfk := range s.compositeFKs {
 		if cfk.Schema == t.Schema && cfk.Table == t.Name {
 			for _, col := range cfk.LocalCols {
 				compositeCols[col] = cfk.ConstraintName
 			}
+			compositeFK[cfk.ConstraintName] = cfk
 		}
 	}
 
@@ -415,6 +460,18 @@ func (s *DBSchema) addColumnRels(t DBTable) error {
 		switch {
 		case c.FKRecursive: // t.Name == c.FKeyTable:
 			rt = RelRecursive
+		case compositeCols[c.Name] != "":
+			// A composite foreign key joins on a tuple, so the relation's
+			// cardinality comes from the tuple's uniqueness and not from
+			// one column's. A tuple that is the parent's primary key or
+			// one of its unique keys holds one row, so the child belongs
+			// to one parent.
+			rt = RelOneToMany
+			if cfk, ok := compositeFK[compositeCols[c.Name]]; ok {
+				if tupleIsUnique(ft, cfk.FKeyCols) {
+					rt = RelOneToOne
+				}
+			}
 		case fc.UniqueKey:
 			rt = RelOneToOne
 		default:
